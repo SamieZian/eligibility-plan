@@ -89,21 +89,26 @@ async def get_plan(plan_id: UUID) -> PlanOut:
         return _to_out(p)
 
 
-@router.get("/plans", response_model=PlanOut)
-async def get_plan_by_code(code: str = Query(...)) -> PlanOut:
-    try:
-        cached = await cache.get_by_code(settings.redis_url, code)
-    except Exception:
-        cached = None
-    if cached is not None:
-        return _to_out(cached)
+@router.get("/plans")
+async def list_or_find_plans(code: str | None = Query(None)) -> Any:
+    """If `code` provided, return that single plan. Otherwise list all plans."""
     async with session_scope() as s:
         repo = PlanRepo(s)
-        p = await repo.find_by_code(code)
-        if p is None:
-            raise NotFoundError(Codes.MEMBER_NOT_FOUND, f"Plan code {code} not found")
-        try:
-            await cache.set_plan(settings.redis_url, p, settings.plan_cache_ttl_seconds)
-        except Exception:
-            pass
-        return _to_out(p)
+        if code:
+            try:
+                cached = await cache.get_by_code(settings.redis_url, code)
+            except Exception:
+                cached = None
+            if cached is not None:
+                return _to_out(cached)
+            p = await repo.find_by_code(code)
+            if p is None:
+                raise NotFoundError(Codes.MEMBER_NOT_FOUND, f"Plan code {code} not found")
+            try:
+                await cache.set_plan(settings.redis_url, p, settings.plan_cache_ttl_seconds)
+            except Exception:
+                pass
+            return _to_out(p)
+        # No code → return full catalog
+        plans = await repo.list_all()
+        return [_to_out(p) for p in plans]

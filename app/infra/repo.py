@@ -29,6 +29,19 @@ class PlanRepo:
         ).first()
         return _row_to_plan(r) if r else None
 
+    async def list_all(self) -> list[Plan]:
+        rows = (
+            await self.s.execute(
+                text(
+                    """
+                    SELECT id, plan_code, name, type, metal_level, attributes, version
+                    FROM plans ORDER BY plan_code
+                    """
+                ),
+            )
+        ).all()
+        return [_row_to_plan(r) for r in rows]
+
     async def find_by_code(self, plan_code: str) -> Plan | None:
         r = (
             await self.s.execute(
