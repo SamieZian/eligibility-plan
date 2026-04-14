@@ -1,14 +1,14 @@
 """Repository — the only place that touches the DB for the Plan aggregate."""
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.plan import Plan, new_id
+from app.infra.models import Plan as PlanORM
 
 
 class PlanRepo:
@@ -16,86 +16,50 @@ class PlanRepo:
         self.s = session
 
     async def find_by_id(self, plan_id: UUID) -> Plan | None:
-        r = (
-            await self.s.execute(
-                text(
-                    """
-                    SELECT id, plan_code, name, type, metal_level, attributes, version
-                    FROM plans WHERE id = :id
-                    """
-                ),
-                {"id": str(plan_id)},
-            )
-        ).first()
+        stmt = select(PlanORM).where(PlanORM.id == plan_id)
+        r = (await self.s.execute(stmt)).scalar_one_or_none()
         return _row_to_plan(r) if r else None
 
     async def list_all(self) -> list[Plan]:
-        rows = (
-            await self.s.execute(
-                text(
-                    """
-                    SELECT id, plan_code, name, type, metal_level, attributes, version
-                    FROM plans ORDER BY plan_code
-                    """
-                ),
-            )
-        ).all()
+        stmt = select(PlanORM).order_by(PlanORM.plan_code)
+        rows = (await self.s.execute(stmt)).scalars().all()
         return [_row_to_plan(r) for r in rows]
 
     async def find_by_code(self, plan_code: str) -> Plan | None:
-        r = (
-            await self.s.execute(
-                text(
-                    """
-                    SELECT id, plan_code, name, type, metal_level, attributes, version
-                    FROM plans WHERE plan_code = :c
-                    """
-                ),
-                {"c": plan_code},
-            )
-        ).first()
+        stmt = select(PlanORM).where(PlanORM.plan_code == plan_code)
+        r = (await self.s.execute(stmt)).scalar_one_or_none()
         return _row_to_plan(r) if r else None
 
     async def upsert(self, p: Plan) -> Plan:
         existing = await self.find_by_code(p.plan_code)
         if existing is None:
             plan_id = p.id or new_id()
-            await self.s.execute(
-                text(
-                    """
-                    INSERT INTO plans (id, plan_code, name, type, metal_level, attributes, version)
-                    VALUES (:id, :c, :n, :t, :ml, CAST(:a AS JSONB), 1)
-                    """
-                ),
-                {
-                    "id": str(plan_id),
-                    "c": p.plan_code,
-                    "n": p.name,
-                    "t": p.type,
-                    "ml": p.metal_level,
-                    "a": json.dumps(p.attributes or {}),
-                },
+            orm = PlanORM(
+                id=plan_id,
+                plan_code=p.plan_code,
+                name=p.name,
+                type=p.type,
+                metal_level=p.metal_level,
+                attributes=p.attributes or {},
+                version=1,
             )
+            self.s.add(orm)
+            await self.s.flush()
             p.id = plan_id
             p.version = 1
             return p
-        await self.s.execute(
-            text(
-                """
-                UPDATE plans
-                SET name = :n, type = :t, metal_level = :ml,
-                    attributes = CAST(:a AS JSONB), version = version + 1
-                WHERE id = :id
-                """
-            ),
-            {
-                "id": str(existing.id),
-                "n": p.name,
-                "t": p.type,
-                "ml": p.metal_level,
-                "a": json.dumps(p.attributes or {}),
-            },
+        stmt = (
+            update(PlanORM)
+            .where(PlanORM.id == existing.id)
+            .values(
+                name=p.name,
+                type=p.type,
+                metal_level=p.metal_level,
+                attributes=p.attributes or {},
+                version=PlanORM.version + 1,
+            )
         )
+        await self.s.execute(stmt)
         existing.name = p.name
         existing.type = p.type
         existing.metal_level = p.metal_level
