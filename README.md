@@ -116,11 +116,51 @@ See `app/interfaces/api.py` for the route list. Standard endpoints:
 - `GET /livez` → liveness probe
 - `GET /readyz` → readiness probe (checks deps reachable)
 
+## Testing via curl
+
+Service listens on port **8004**.
+
+```bash
+BASE=http://localhost:8004
+T=11111111-1111-1111-1111-111111111111
+H=(-H "Content-Type: application/json" -H "X-Tenant-Id: $T")
+```
+
+**List plans**
+
+```bash
+curl -s $BASE/plans -H "X-Tenant-Id: $T" | jq .
+```
+
+**Create / upsert a plan** (idempotent on `plan_code`)
+
+```bash
+PLAN=$(curl -s -X POST $BASE/plans "${H[@]}" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "plan_code": "PLAN-PLATINUM",
+    "name": "Platinum Health",
+    "type": "HLT",
+    "metal_level": "platinum",
+    "attributes": {"copay": 0, "deductible": 0}
+  }' | jq -r .id)
+```
+
+**Get by id**
+
+```bash
+curl -s "$BASE/plans/$PLAN" -H "X-Tenant-Id: $T" | jq .
+```
+
+**Redis cache** — the service uses write-through caching via Redis. First GET warms the cache; subsequent reads for the same plan_id are served from Redis. Cache invalidates on `PlanUpdated` via pub/sub — no stale reads across replicas.
+
 ## Patterns used
 
 - Hexagonal architecture (domain / application / infra / interfaces)
+- SQLAlchemy 2.0 ORM with `on_conflict_do_update` for upserts
 - Transactional outbox for at-least-once event delivery
-- Idempotent commands (each command's effect is repeatable)
+- Redis cache-aside with pub/sub invalidation on `PlanUpdated`
+- Optimistic locking via `version` column
 - Structured JSON logs with correlation ID propagation
 - OpenTelemetry traces (BFF → service → DB)
 - Circuit breakers on outbound HTTP
